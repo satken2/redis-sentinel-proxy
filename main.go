@@ -12,14 +12,14 @@ import (
 )
 
 var (
-	masterAddr     *net.TCPAddr
+	masterAddr		 *net.TCPAddr
 	prevMasterAddr *net.TCPAddr
-	raddr          *net.TCPAddr
-	saddr          *net.TCPAddr
+	raddr					*net.TCPAddr
+	saddr					*net.TCPAddr
 
-	localAddr    = flag.String("listen", ":9999", "local address")
+	localAddr		= flag.String("listen", ":9999", "local address")
 	sentinelAddr = flag.String("sentinel", ":26379", "remote address")
-	masterName   = flag.String("master", "", "name of the master redis node")
+	masterName	 = flag.String("master", "", "name of the master redis node")
 )
 
 func main() {
@@ -61,7 +61,7 @@ func master(stopChan *chan struct{}) {
 			log.Println(err)
 		}
 		if masterAddr.String() != prevMasterAddr.String() {
-			fmt.Printf("Master Address changed. Closing stopChan. %s v. %s \n", masterAddr.String(), prevMasterAddr.String())
+			log.Println("Master Address changed. Closing stopChan. " + prevMasterAddr.String() + " -> " + masterAddr.String())
 			close(*stopChan)
 			*stopChan = make(chan struct{})
 		}
@@ -73,12 +73,10 @@ func master(stopChan *chan struct{}) {
 func pipe(r io.Reader, w io.WriteCloser) {
 	io.Copy(w, r)
 	w.Close()
-	fmt.Println("Closing pipe")
 }
 
 // pass a stopChan to the go routtine
 func proxy(local io.ReadWriteCloser, remoteAddr *net.TCPAddr, stopChan chan struct{}) {
-	fmt.Printf("Opening a new connection on remoteAddr, %s\n", remoteAddr)
 	remote, err := net.DialTCP("tcp", nil, remoteAddr)
 	if err != nil {
 		log.Println(err)
@@ -88,13 +86,14 @@ func proxy(local io.ReadWriteCloser, remoteAddr *net.TCPAddr, stopChan chan stru
 	go pipe(local, remote)
 	go pipe(remote, local)
 	<-stopChan // read from stopChan
-	fmt.Println("Closing Proxy")
 	local.Close()
 }
 
 func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAddr, error) {
 	conn, err := net.DialTCP("tcp", nil, sentinelAddress)
 	if err != nil {
+		log.Println("Failed to get master address from sentinel. Updating sentinel tcp address.")
+		updateSentinelAddr()
 		return nil, err
 	}
 
@@ -130,4 +129,19 @@ func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAdd
 	}
 
 	return addr, err
+}
+
+func updateSentinelAddr() {
+	log.Println("Resolving sentinel address")
+	for {
+		addr, err := net.ResolveTCPAddr("tcp", *sentinelAddr)
+		if err != nil {
+			log.Println("Failed to resolve sentinel address. Retrying in 10 seconds...")
+			time.Sleep(10 * time.Second)
+		} else {
+			saddr = addr
+			log.Println("Successfully updated sentinel address.")
+			break
+		}
+	}
 }
