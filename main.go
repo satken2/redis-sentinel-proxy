@@ -9,17 +9,19 @@ import (
 	"net"
 	"strings"
 	"time"
+	"strconv"
 )
 
 var (
-	masterAddr		 *net.TCPAddr
-	prevMasterAddr *net.TCPAddr
-	raddr					*net.TCPAddr
-	saddr					*net.TCPAddr
+	masterAddr *net.TCPAddr
+	raddr			*net.TCPAddr
+	saddr			*net.TCPAddr
 
 	localAddr		= flag.String("listen", ":9999", "local address")
 	sentinelAddr = flag.String("sentinel", ":26379", "remote address")
 	masterName	 = flag.String("master", "", "name of the master redis node")
+		
+	RETRY_LIMIT = 5
 )
 
 func main() {
@@ -27,46 +29,33 @@ func main() {
 
 	laddr, err := net.ResolveTCPAddr("tcp", *localAddr)
 	if err != nil {
-		log.Fatalf("Failed to resolve local address: %s", err)
+		log.Fatal("FATAL: Failed to resolve local address: %s", err)
 	}
 	saddr, err = net.ResolveTCPAddr("tcp", *sentinelAddr)
 	if err != nil {
-		log.Fatalf("Failed to resolve sentinel address: %s", err)
+		log.Fatal("FATAL: to resolve sentinel address: %s", err)
 	}
-
-	stopChan := make(chan struct{})
-	go master(&stopChan)
-
+		
 	listener, err := net.ListenTCP("tcp", laddr)
 	if err != nil {
 		log.Fatal(err)
 	}
+		
+	masterAddr, err = getMasterAddr(saddr, *masterName)
+	if err != nil {
+			log.Println(err)
+			log.Println("ERROR: Failed to get master address.")
+	}
 
+	log.Println("INFO: Startup ok. Waiting for TCP connection.")
 	for {
 		conn, err := listener.AcceptTCP()
 		if err != nil {
 			log.Println(err)
 			continue
 		}
-		go proxy(conn, masterAddr, stopChan)
-	}
-}
-
-func master(stopChan *chan struct{}) {
-	var err error
-	for {
-		// has master changed from last time?
-		masterAddr, err = getMasterAddr(saddr, *masterName)
-		if err != nil {
-			log.Println(err)
-		}
-		if masterAddr.String() != prevMasterAddr.String() {
-			log.Println("Master Address changed. Closing stopChan. " + prevMasterAddr.String() + " -> " + masterAddr.String())
-			close(*stopChan)
-			*stopChan = make(chan struct{})
-		}
-		prevMasterAddr = masterAddr
-		time.Sleep(1 * time.Second)
+		
+		go proxy(conn)
 	}
 }
 
@@ -75,24 +64,61 @@ func pipe(r io.Reader, w io.WriteCloser) {
 	w.Close()
 }
 
-// pass a stopChan to the go routtine
-func proxy(local io.ReadWriteCloser, remoteAddr *net.TCPAddr, stopChan chan struct{}) {
-	remote, err := net.DialTCP("tcp", nil, remoteAddr)
-	if err != nil {
-		log.Println(err)
-		local.Close()
-		return
+func proxy(local io.ReadWriteCloser) {
+	// wait for master address update
+	for i := 1; i <= RETRY_LIMIT; i++ {
+		if masterAddr == nil {
+			if i == RETRY_LIMIT {
+				log.Println("FATAL: Failed to establish master connection. closing...")
+				local.Close()
+				return
+			} else {
+				log.Println("INFO: Master addr is unknown. waiting...")
+			}
+		} else {
+			break
+		}
+		time.Sleep(2 * time.Second)
 	}
+		
+	tempAddr := masterAddr
+
+	var remote *net.TCPConn
+	
+	for i := 0; i <= RETRY_LIMIT; i++ {
+		var err error
+		remote, err = net.DialTCP("tcp", nil, tempAddr)
+		if err == nil {
+			masterAddr = tempAddr
+			break
+		} else {
+			if i == RETRY_LIMIT {
+				log.Println("FATAL: Failed to establish master connection. closing...")
+				local.Close()
+				return
+			} else {
+				masterAddr = nil
+				log.Println(err)
+				log.Println("INFO: Failed to connect to master. Obtaining new master address. attempt=" + strconv.Itoa(i))
+				tempAddr, err = getMasterAddr(saddr, *masterName)
+				if err == nil {
+					continue
+				} else {
+					log.Println(err)
+				}
+			}
+		}
+		time.Sleep(1 * time.Second)
+	}
+		
 	go pipe(local, remote)
 	go pipe(remote, local)
-	<-stopChan // read from stopChan
-	local.Close()
 }
 
 func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAddr, error) {
 	conn, err := net.DialTCP("tcp", nil, sentinelAddress)
 	if err != nil {
-		log.Println("Failed to get master address from sentinel. Updating sentinel tcp address.")
+		log.Println("WARNING: Failed to connect to sentinel. Updating sentinel tcp address.")
 		updateSentinelAddr()
 		return nil, err
 	}
@@ -110,7 +136,7 @@ func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAdd
 	parts := strings.Split(string(b), "\r\n")
 
 	if len(parts) < 5 {
-		err = errors.New("Couldn't get master address from sentinel")
+		err = errors.New("WARNING: Couldn't get master address from sentinel")
 		return nil, err
 	}
 
@@ -136,11 +162,11 @@ func updateSentinelAddr() {
 	for {
 		addr, err := net.ResolveTCPAddr("tcp", *sentinelAddr)
 		if err != nil {
-			log.Println("Failed to resolve sentinel address. Retrying in 10 seconds...")
+			log.Println("WARNING: Failed to resolve sentinel address. Retrying in 10 seconds...")
 			time.Sleep(10 * time.Second)
 		} else {
 			saddr = addr
-			log.Println("Successfully updated sentinel address.")
+			log.Println("INFO: Successfully updated sentinel address.")
 			break
 		}
 	}
