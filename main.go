@@ -47,20 +47,19 @@ func main() {
 			continue
 		}
 
+    log.Println("go proxy")
 		go proxy(conn, masterAddr)
 	}
 }
 
 func master() {
-  log.Println("Master go loop start")
 	var err error
 	for {
-    log.Println("getMasterAddr")
 		masterAddr, err = getMasterAddr(saddr, *masterName)
 		if err != nil {
 			log.Println(err)
 		}
-		time.Sleep(1 * time.Second)
+		time.Sleep(10 * time.Second)
 	}
 }
 
