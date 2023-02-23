@@ -26,11 +26,11 @@ func main() {
 
 	laddr, err := net.ResolveTCPAddr("tcp", *localAddr)
 	if err != nil {
-		log.Fatal("Failed to resolve local address: %s", err)
+		log.Fatal("ERROR: Failed to resolve local address: %s", err)
 	}
 	saddr, err = net.ResolveTCPAddr("tcp", *sentinelAddr)
 	if err != nil {
-		log.Fatal("Failed to resolve sentinel address: %s", err)
+		log.Fatal("ERROR: Failed to resolve sentinel address: %s", err)
 	}
 
 	go master()
@@ -47,7 +47,6 @@ func main() {
 			continue
 		}
 
-    log.Println("go proxy")
 		go proxy(conn, masterAddr)
 	}
 }
@@ -59,7 +58,7 @@ func master() {
 		if err != nil {
 			log.Println(err)
 		}
-		time.Sleep(10 * time.Second)
+		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -73,6 +72,7 @@ func proxy(local io.ReadWriteCloser, remoteAddr *net.TCPAddr) {
 	if err != nil {
 		log.Println(err)
 		local.Close()
+    log.Println("WARNING: Master connection failed. Closing connection...")
 		return
 	}
 	go pipe(local, remote)
@@ -82,7 +82,7 @@ func proxy(local io.ReadWriteCloser, remoteAddr *net.TCPAddr) {
 func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAddr, error) {
 	conn, err := net.DialTCP("tcp", nil, sentinelAddress)
 	if err != nil {
-    log.Println("Failed to connect to sentinel. Updating sentinel tcp address.")
+    log.Println("WARNING: Failed to connect to sentinel. Updating sentinel tcp address.")
     updateSentinelAddr()
 		return nil, err
 	}
@@ -100,7 +100,7 @@ func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAdd
 	parts := strings.Split(string(b), "\r\n")
 
 	if len(parts) < 5 {
-		err = errors.New("Couldn't get master address from sentinel")
+		err = errors.New("ERROR: Couldn't get master address from sentinel")
 		return nil, err
 	}
 
@@ -110,9 +110,7 @@ func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAdd
 
 	if err != nil {
 		return nil, err
-	} else {
-    log.Println("Master address is " + stringaddr)
-  }
+	}
 
 	//check that there's actually someone listening on that address
 	conn2, err := net.DialTCP("tcp", nil, addr)
@@ -124,15 +122,15 @@ func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAdd
 }
 
 func updateSentinelAddr()  {
-  log.Println("Resolving sentinel address: %s", sentinelAddr)
+  log.Println("INFO: Resolving sentinel address: %s", sentinelAddr)
   for {
     addr, err := net.ResolveTCPAddr("tcp", *sentinelAddr)
     if err != nil {
-      log.Println("Failed to resolve sentinel address. Retrying in 10 seconds...")
+      log.Println("WARNING: Failed to resolve sentinel address. Retrying in 10 seconds...")
       time.Sleep(10 * time.Second)
     } else {
       saddr = addr
-      log.Println("Successfully updated sentinel address.")
+      log.Println("INFO: Successfully updated sentinel address.")
       break
     }
   }
