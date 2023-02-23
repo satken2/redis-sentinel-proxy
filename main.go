@@ -146,7 +146,9 @@ func getMasterAddr(sentinelAddress *net.TCPAddr, masterName string) (*net.TCPAdd
 
 	if err != nil {
 		return nil, err
-	}
+	} else {
+    log.Println("Master address is " + stringaddr)
+  }
 
 	//check that there's actually someone listening on that address
 	conn2, err := net.DialTCP("tcp", nil, addr)
