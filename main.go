@@ -68,7 +68,8 @@ func pipe(r io.Reader, w io.WriteCloser) {
 }
 
 func proxy(local io.ReadWriteCloser, remoteAddr *net.TCPAddr) {
-	remote, err := net.DialTCP("tcp", nil, remoteAddr)
+  dialer := net.Dialer{Timeout: 10}
+  remote, err := dialer.Dial("tcp", remoteAddr)
 	if err != nil {
 		log.Println(err)
 		local.Close()
